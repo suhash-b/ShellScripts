@@ -41,9 +41,20 @@ for i in `cat $FILE`; do
   fi
 done
 
+# Get the least utilized machine
+
+ip=`sort -nk2 ${DEST} |head -1 |awk '{print $1}'`
+cpu=sort -nk2 ${DEST} |head -1 |awk '{print $2}'`
+
+echo "Least utilized machine with IP" $ip " having CPU utiliztion" $cpu "%"
+
 # All line items have been gone through,
 # show done, and exit out
 echo ""
 echo "Done!"
 echo "Check the list 'checkssh_failure' for errors."
-exit 0
+
+# SSHing to the host
+echo "SSHing to the host..."
+
+ssh username@$ip

@@ -1,60 +1,104 @@
 #!/bin/bash
 clear
 
-# Username to connect via ssh
-USER= <UserName>
+echo ""
+echo "Load Balancer: Fetch Instance with least CPU and Login"
+echo "======================================================"
+timestamp=$(date)
+echo "DATE:" "$timestamp" 
+echo ""
+echo ""
 
 # Destination path/filename to save results to
-DEST=<Outputfile>
+CPU_FILE=CPUUtilization.out
 
 # source list of host IPs to read from
-FILE=<hostIPs>
+INSTANCE_ID_FILE=InstanceID.out
 
-# source output of the instances for a loadbalancer
-ELB_FILE=ELB_File.out
+# Removing temporary Files
+rm -f $CPU_FILE $INSTANCE_ID_FILE
 
-# Returns a list of instances connected to the ELB.
-aws elb describe-instance-health --load-balancer-name <ELB name> > $ELB_FILE
-<Code to extract the instance IDs>
+echo "Fetching all the Instance IDs..."  
+echo ""
 
-# Returns among other things the IP address of the instance.
-aws ec2 describe-instances <instance id>
-aws ec2 describe-instances | grep PublicIpAddress | grep -o -P "\d+\.\d+\.\d+\.\d+" | grep -v '^10\.'
-
-# Iterate through line items in FILE and
-# execute ssh, if we connected successfully
-# run proc/loadavg to find cpu load
-# write it to DEST path/file
-# if we don't connect successfully, write the hostname
-# and "unable to connect to host" error to DEST path/file
-
-for i in `cat $FILE`; do
-  echo -n ".";
-  CHK=`ssh -q -T -o ConnectTimeout=10 -o ConnectionAttempts=1 username@$i "echo success"`;
-  if [ "success" = $CHK ] >/dev/null 2>&1
-  then
-    `ssh -q -T -o ConnectTimeout=10 -o ConnectionAttempts=1 username@$i "\
-        printf "$i    ";
-        echo "`cat /proc/loadavg | awk '{print $3}'`";" >> ${DEST}`;
-  else
-    printf "${i}\tUnable to connect to host\n" >> ${DEST};
-  fi
+# Returns a list of instances in the Auto-scaling group.
+#aws ec2 describe-instances  --query Reservations[*].Instances[*].[InstanceId] > $INSTANCE_ID_FILE
+for i in $(aws autoscaling describe-auto-scaling-instances --query AutoScalingInstances[].InstanceId --output text);
+do
+  echo "$i" >> $INSTANCE_ID_FILE
 done
 
-# Get the least utilized machine
+cat $INSTANCE_ID_FILE
 
-ip=`sort -nk2 ${DEST} |head -1 |awk '{print $1}'`
-cpu=sort -nk2 ${DEST} |head -1 |awk '{print $2}'`
+# Total number of instances
+instance_count=$(wc -l $INSTANCE_ID_FILE |awk '{print $1}')
 
-echo "Least utilized machine with IP" $ip " having CPU utiliztion" $cpu "%"
-
-# All line items have been gone through,
-# show done, and exit out
 echo ""
-echo "Done!"
-echo "Check the list 'checkssh_failure' for errors."
+echo ""
+echo "Total number of instances: $instance_count"
+echo ""
+echo ""
 
-# SSHing to the host
-echo "SSHing to the host..."
+# Extract Current Time
+now=$(date +"%T")
+echo "Current time : $now"
+echo ""
+echo "Getting the CPU Utilization of the instances during the last hour."
 
-ssh username@$ip
+# Format Timestamp
+
+start_time=$(date -d '1 hour ago' +"%Y-%m-%dT%H:%M:%SZ")
+end_time=$(date +"%Y-%m-%dT%H:%M:%SZ")
+
+# Iterate through line items in INSTANCE_ID_FILE and
+# return the CPU Utilization of the instances for the past One Hour
+# write it to DEST path/file
+
+
+cat $INSTANCE_ID_FILE | while read instance_id
+do
+  cpu_utilization=$(aws cloudwatch get-metric-statistics --namespace AWS/EC2 --metric-name CPUUtilization --period 3600 --statistics Maximum --dimensions Name=InstanceId,Value=${instance_id} --start-time ${start_time} --end-time ${end_time} |grep DATAPOINTS |awk '{print $2}')
+  printf "$instance_id %0.2f\n" $cpu_utilization >> $CPU_FILE
+  echo "" >> $CPU_FILE
+done
+
+# Fetching the instance ID and CPU Utilization
+echo ""
+echo "CPU Utilization percentages of the instances"
+echo ""
+cat $CPU_FILE
+
+
+# Get the least utilized machine
+inst_id=$(grep . $CPU_FILE | sort -nk2 |head -1 |awk '{print $1}')
+cpu=$(grep . $CPU_FILE | sort -nk2 |head -1 |awk '{print $2}')
+echo ""
+echo ""
+echo "Least utilized machine with instance ID is" "$inst_id" " having CPU utiliztion" "$cpu" "% during the last one-hour."
+
+echo ""
+
+# Removing temporary Files
+rm -f $CPU_FILE $INSTANCE_ID_FILE
+
+echo ""
+
+echo "Do you want to login to the instance ID" "$inst_id" "?. Enter Y(or y)/N(or n)% during the last one-hour."
+read -p "Yes or No? (type Y or N) " answer
+case $answer in
+y|Y)
+    # Logging in to the host
+    clear
+    echo ""
+    echo "Logging in to the instance..."
+    echo ""
+    aws ssm start-session --target ${inst_id}
+;;
+n|N)
+    echo "Not logging in to instance. Thank you."
+;;
+*)
+	  echo "No valid answer, exiting.."
+	  exit
+;;
+esac
